@@ -10,10 +10,7 @@ namespace ogui
     {
         Draw,
         SetScissor,
-        SetTexture,
-        CreateTexture,
-        UpdateTexture,
-        DestroyTexture,
+        BindTexture,
         UserDraw
     };
 
@@ -32,29 +29,10 @@ namespace ogui
                 uint32_t x, y, width, height;
             } scissorData;
 
-            struct SetTextureData
+            struct BindTextureData
             {
                 uintptr_t textureId;
-            } setTextureData;
-
-            struct CreateTextureData
-            {
-                uintptr_t *pTextureId;
-                uint32_t width, height;
-                uint8_t *pData;
-            } createTextureData;
-
-            struct UpdateTextureData
-            {
-                uintptr_t textureId;
-                uint32_t width, height;
-                uint8_t *pData;
-            } updateTextureData;
-
-            struct DestroyTextureData
-            {
-                uintptr_t textureId;
-            } destroyTextureData;
+            } bindTextureData;
 
             struct UserDrawData
             {
@@ -96,6 +74,10 @@ namespace ogui
         };
 
         IRenderer *m_pRenderer = nullptr;
+        bool m_isDirty = true;
+        
+        int m_width = 200, m_height = 200;
+        int m_mouseX = 0, m_mouseY = 0;
 
         std::vector<Vertex> m_vertices;
         std::vector<DrawCommand> m_drawList;
@@ -107,8 +89,13 @@ namespace ogui
 
         Texture m_whiteTexture;
 
-        Context(IRenderer *pRenderer)
+        DrawCommand m_drawCmd;
+        uintptr_t m_lastBoundTexture = 0;
+
+        Context(IRenderer *pRenderer, int width, int height)
             : m_pRenderer(pRenderer)
+            , m_width(width)
+            , m_height(height)
         {
             // Setup default theme
             m_theme.panelMargin = 8.0f;
@@ -158,58 +145,49 @@ namespace ogui
             m_whiteTexture.height = 1;
             m_whiteTexture.pData = (uint8_t *)&WHITE;
             m_textureToCreate.push_back(&m_whiteTexture);
+
+            m_drawCmd.command = eDrawCommand::Draw;
         }
 
         ~Context() {}
-
-        void update(int width, int height) override
-        {
-        }
 
         void render() override
         {
             m_vertices.clear();
             m_drawList.clear();
 
+            m_drawCmd.drawData.vertexStart = 0;
+            m_drawCmd.drawData.vertexCount = 0;
+            m_lastBoundTexture = 0;
+
             // Create textures
             for (auto &textureToCreate : m_textureToCreate)
             {
-                DrawCommand cmd;
-                cmd.command = eDrawCommand::CreateTexture;
-                cmd.createTextureData.pTextureId = &textureToCreate->id;
-                cmd.createTextureData.width = textureToCreate->width;
-                cmd.createTextureData.height = textureToCreate->height;
-                cmd.createTextureData.pData = textureToCreate->pData;
-                m_drawList.push_back(cmd);
+                textureToCreate->id = m_pRenderer->createTexture(textureToCreate->width, textureToCreate->height, textureToCreate->pData);
             }
             m_textureToCreate.clear();
 
             // Update textures
             for (auto &textureToUpdate : m_textureToUpdate)
             {
-                DrawCommand cmd;
-                cmd.command = eDrawCommand::UpdateTexture;
-                cmd.updateTextureData.textureId = textureToUpdate->id;
-                cmd.updateTextureData.width = textureToUpdate->width;
-                cmd.updateTextureData.height = textureToUpdate->height;
-                cmd.updateTextureData.pData = textureToUpdate->pData;
-                m_drawList.push_back(cmd);
+                m_pRenderer->updateTexture(textureToUpdate->id, textureToUpdate->width, textureToUpdate->height, textureToUpdate->pData);
             }
             m_textureToUpdate.clear();
 
             // Destroy textures
             for (auto &textureToDestroy : m_textureToDestroy)
             {
-                DrawCommand cmd;
-                cmd.command = eDrawCommand::UpdateTexture;
-                cmd.destroyTextureData.textureId = textureToDestroy->id;
-                m_drawList.push_back(cmd);
+                m_pRenderer->destroyTexture(textureToDestroy->id);
             }
             m_textureToDestroy.clear();
+
+            if (!m_isDirty) return;
+            m_isDirty = false;
 
             // Generate drawlist
             bindTexture(m_whiteTexture);
             drawRect({ 50, 100, 150, 25 }, { 1, 0, 0, 1 });
+            flush();
 
             // Call into the renderer for the actual render
             m_pRenderer->beginFrame();
@@ -225,17 +203,8 @@ namespace ogui
                     case ogui::eDrawCommand::SetScissor:
                         m_pRenderer->scissor(cmd.scissorData.x, cmd.scissorData.y, cmd.scissorData.width, cmd.scissorData.height);
                         break;
-                    case ogui::eDrawCommand::SetTexture:
-                        m_pRenderer->bindTexture(cmd.setTextureData.textureId);
-                        break;
-                    case ogui::eDrawCommand::CreateTexture:
-                        *cmd.createTextureData.pTextureId = m_pRenderer->createTexture(cmd.createTextureData.width, cmd.createTextureData.height, cmd.createTextureData.pData);
-                        break;
-                    case ogui::eDrawCommand::UpdateTexture:
-                        m_pRenderer->updateTexture(cmd.updateTextureData.textureId, cmd.updateTextureData.width, cmd.updateTextureData.height, cmd.updateTextureData.pData);
-                        break;
-                    case ogui::eDrawCommand::DestroyTexture:
-                        m_pRenderer->destroyTexture(cmd.destroyTextureData.textureId);
+                    case ogui::eDrawCommand::BindTexture:
+                        m_pRenderer->bindTexture(cmd.bindTextureData.textureId);
                         break;
                     case ogui::eDrawCommand::UserDraw:
                         m_pRenderer->userDraw(cmd.userDrawData.userDrawFn, cmd.userDrawData.pUserData, &cmd.userDrawData.x);
@@ -250,14 +219,77 @@ namespace ogui
 
         void setTheme(const Theme &theme) override
         {
+            m_theme = theme; // TODO: update textures
+            m_isDirty = true;
+        }
+
+        void onResize(int width, int height) override
+        {
+            bool shouldUpdateLayout = false;
+            if (m_width != width || m_height != height)
+                shouldUpdateLayout = true;
+            m_width = width;
+            m_height = height;
+            if (shouldUpdateLayout)
+            {
+                updateLayout();
+            }
+        }
+
+        void onMouseMove(int x, int y) override
+        {
+        }
+
+        void onMouseButtonDown(int button) override
+        {
+        }
+
+        void onMouseButtonUp(int button) override
+        {
+        }
+
+        void onMouseScroll(int scroll) override
+        {
+        }
+
+        void onKeyDown(int key) override
+        {
+        }
+
+        void onKeyUp(int key) override
+        {
+        }
+
+        void onTextInput(const std::string &text) override
+        {
+        }
+
+        void updateLayout()
+        {
+            m_isDirty = true;
+        }
+
+        void flush()
+        {
+            if (m_drawCmd.drawData.vertexCount)
+            {
+                m_drawList.push_back(m_drawCmd);
+                m_drawCmd.drawData.vertexStart += m_drawCmd.drawData.vertexCount;
+                m_drawCmd.drawData.vertexCount = 0;
+            }
         }
 
         void bindTexture(const Texture &texture)
         {
+            if (texture.id == m_lastBoundTexture) return;
+            flush();
+
             DrawCommand cmd;
-            cmd.command = eDrawCommand::SetTexture;
-            cmd.setTextureData.textureId = m_whiteTexture.id;
+            cmd.command = eDrawCommand::BindTexture;
+            cmd.bindTextureData.textureId = texture.id;
             m_drawList.push_back(cmd);
+
+            m_lastBoundTexture = texture.id;
         }
 
         void drawRect(const Rect &rect, const Color &color)
@@ -271,18 +303,14 @@ namespace ogui
             m_vertices.push_back(Vertex{ { rect.x + rect.w, rect.y }, { 0, 0 }, color32 });
             m_vertices.push_back(Vertex{ { rect.x, rect.y }, { 0, 0 }, color32 });
 
-            DrawCommand cmd;
-            cmd.command = eDrawCommand::Draw;
-            cmd.drawData.vertexStart = 0;
-            cmd.drawData.vertexCount = 6;
-            m_drawList.push_back(cmd);
+            m_drawCmd.drawData.vertexCount += 6;
         }
     };
 
-    IContext *IContext::create(IRenderer *pRenderer)
+    IContext *IContext::create(IRenderer *pRenderer, int width, int height)
     {
         assert(pRenderer && "Must have valid renderer.");
         if (!pRenderer) return nullptr;
-        return new Context(pRenderer);
+        return new Context(pRenderer, width, height);
     }
 }

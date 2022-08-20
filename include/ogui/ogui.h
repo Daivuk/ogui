@@ -1,36 +1,12 @@
-#ifndef OGUI_H_INCLUDED
-#define OGUI_H_INCLUDED
+#pragma once
 
-#include <cinttypes>
+#include "ogui/types.h"
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 namespace ogui
 {
-    // Structures
-    struct Vec2
-    {
-        float x, y;
-    };
-
-    struct Rect
-    {
-        float x, y, w, h;
-    };
-
-    struct Vertex
-    {
-        Vec2 position;
-        Vec2 uv;
-        uint32_t color;
-    };
-    
-    struct Color
-    {
-        float r, g, b, a;
-    };
-
     struct Theme
     {
         std::string font;
@@ -118,19 +94,25 @@ namespace ogui
     class IContext
     {
     public:
-        static IContext *create(IRenderer *pRenderer);
+        static IContext *create(IRenderer *pRenderer, int width, int height);
 
         virtual ~IContext() {}
 
-        virtual void update(int width, int height) = 0; // Update GUI and fire events. Pass in the current application width/height
         virtual void render() = 0; // Generate draw list
 
         virtual const Theme &getTheme() const = 0;
         virtual void setTheme(const Theme &theme) = 0;
 
+        virtual void onResize(int width, int height) = 0;
+        virtual void onMouseMove(int x, int y) = 0;
+        virtual void onMouseButtonDown(int button) = 0;
+        virtual void onMouseButtonUp(int button) = 0;
+        virtual void onMouseScroll(int scroll) = 0;
+        virtual void onKeyDown(int key) = 0;
+        virtual void onKeyUp(int key) = 0;
+        virtual void onTextInput(const std::string &text) = 0;
+
     protected:
         IContext() {}
     };
 }
-
-#endif /* OGUI_H_INCLUDED */
