@@ -1,10 +1,10 @@
-#include "ogui/Panel.h"
-#include "ogui/Control.h"
+#include "Panel.h"
 #include "ogui/IContext.h"
+#include "ogui/Widget.h"
 
 namespace ogui
 {
-    PanelRef Panel::create()
+    IPanelRef IPanel::create()
     {
         return std::shared_ptr<Panel>(new Panel());
     }
@@ -17,52 +17,52 @@ namespace ogui
     {
     }
 
-    void Panel::setTitle(const std::string &title)
+    void Panel::setTitle(const std::string &in_title)
     {
-        m_title = title;
+        title = in_title;
     }
 
     void Panel::clear()
     {
-        if (m_controls.empty()) return;
+        if (widgets.empty()) return;
 
-        m_controls.clear();
+        widgets.clear();
         
-        updateLayout(m_rect);
+        updateLayout(clientRect);
     }
 
-    void Panel::add(const ControlRef &pControl)
+    void Panel::add(const WidgetRef &pWidget)
     {
-        if (!pControl) return;
+        if (!pWidget) return;
 
-        m_controls.push_back(pControl);
+        widgets.push_back(pWidget);
         
-        updateLayout(m_rect);
+        updateLayout(clientRect);
     }
 
-    void Panel::insertBefore(const ControlRef &pControl, const ControlRef &pBefore)
+    void Panel::insertBefore(const WidgetRef &pWidget, const WidgetRef &pBefore)
     {
-        if (!pControl) return;
+        if (!pWidget) return;
 
-        auto it = m_controls.begin();
-        for (; it != m_controls.end(); ++it)
+        auto it = widgets.begin();
+        for (; it != widgets.end(); ++it)
         {
             if (*it == pBefore)
             {
                 break;
             }
         }
-        m_controls.insert(it, pControl);
+        widgets.insert(it, pWidget);
         
-        updateLayout(m_rect);
+        updateLayout(clientRect);
     }
 
-    void Panel::insertAfter(const ControlRef &pControl, const ControlRef &pAfter)
+    void Panel::insertAfter(const WidgetRef &pWidget, const WidgetRef &pAfter)
     {
-        if (!pControl) return;
+        if (!pWidget) return;
 
-        auto it = m_controls.begin();
-        for (; it != m_controls.end(); ++it)
+        auto it = widgets.begin();
+        for (; it != widgets.end(); ++it)
         {
             if (*it == pAfter)
             {
@@ -70,21 +70,21 @@ namespace ogui
                 break;
             }
         }
-        m_controls.insert(it, pControl);
+        widgets.insert(it, pWidget);
         
-        updateLayout(m_rect);
+        updateLayout(clientRect);
     }
 
-    void Panel::remove(const ControlRef &pControl)
+    void Panel::remove(const WidgetRef &pWidget)
     {
-        if (!pControl) return;
+        if (!pWidget) return;
 
-        for (auto it = m_controls.begin(); it != m_controls.end(); ++it)
+        for (auto it = widgets.begin(); it != widgets.end(); ++it)
         {
-            if (*it == pControl)
+            if (*it == pWidget)
             {
-                m_controls.erase(it);
-                updateLayout(m_rect);
+                widgets.erase(it);
+                updateLayout(clientRect);
                 break;
             }
         }
@@ -92,8 +92,8 @@ namespace ogui
 
     void Panel::updateLayout(const Rect &rect)
     {
-        if (m_pContext) m_pContext->setDirty();
+        if (pContext) pContext->setDirty();
 
-        m_rect = rect;
+        clientRect = rect;
     }
 }

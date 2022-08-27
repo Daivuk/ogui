@@ -5,8 +5,8 @@
 
 namespace ogui
 {
-    class Panel;
-    using PanelRef = std::shared_ptr<Panel>;
+    class IPanel;
+    using IPanelRef = std::shared_ptr<IPanel>;
 
     class IRenderer;
 
@@ -46,7 +46,7 @@ namespace ogui
         * 
         * @note This will cause a redraw of the screen.
         * */
-        virtual void add(const PanelRef &pPanel, const PanelRef &pDockParent = nullptr, eDockPosition dockPosition = eDockPosition::Middle) = 0;
+        virtual void add(const IPanelRef &pPanel, const IPanelRef &pDockParent = nullptr, eDockPosition dockPosition = eDockPosition::Center) = 0;
 
         /**
         * @brief Remove a panel from the system.
@@ -55,7 +55,7 @@ namespace ogui
         * 
         * @note This will cause a redraw of the screen.
         * */
-        virtual void remove(const PanelRef &pPanel) = 0;
+        virtual void remove(const IPanelRef &pPanel) = 0;
 
         /**
         * @brief Get the current theme.

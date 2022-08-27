@@ -102,7 +102,7 @@ namespace ogui
     * */
     enum class eDockPosition
     {
-        Middle, // Will merge with parent and create a tabbed control.
+        Center, // Will merge with parent and create a tabbed control.
         Left,   // Split the parent in half horizontally. The inserted panel will be on the left, parent on the right.
         Right,  // Split the parent in half horizontally. The inserted panel will be on the right, parent on the left.
         Top,    // Split the parent in half vertically. The inserted panel will be on the top, parent on the bottom.

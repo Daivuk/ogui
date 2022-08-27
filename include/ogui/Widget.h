@@ -2,7 +2,7 @@
 
 namespace ogui
 {
-    class Control
+    class Widget
     {
     public:
     };

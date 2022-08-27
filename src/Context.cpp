@@ -1,5 +1,8 @@
 #include "ogui/IContext.h"
+#include "Context.h"
 #include "ogui/IRenderer.h"
+#include "Panel.h"
+#include "PanelsManager.h"
 
 #include <cassert>
 #include <vector>
@@ -7,43 +10,6 @@
 namespace ogui
 {
     static uint32_t WHITE = 0xFFFFFFFF;
-
-    enum class eDrawCommand : int32_t
-    {
-        Draw,
-        SetScissor,
-        BindTexture,
-        UserDraw
-    };
-
-    struct DrawCommand
-    {
-        eDrawCommand command;
-        union
-        {
-            struct DrawData
-            {
-                uint32_t vertexStart, vertexCount;
-            } drawData;
-
-            struct ScissorData
-            {
-                uint32_t x, y, width, height;
-            } scissorData;
-
-            struct BindTextureData
-            {
-                uintptr_t textureId;
-            } bindTextureData;
-
-            struct UserDrawData
-            {
-                UserDrawFn userDrawFn;
-                void *pUserData;
-                uint32_t x, y, width, height;
-            } userDrawData;
-        };
-    };
 
     static Color HexToColor(uint32_t hex)
     {
@@ -65,268 +31,292 @@ namespace ogui
         return packed;
     }
 
-    class Context final : public IContext
+    Context::Context(IRenderer *in_pRenderer, int in_width, int in_height)
+        : pRenderer(in_pRenderer)
+        , width(in_width)
+        , height(in_height)
     {
-    public:
-        struct Texture
+        // Setup default theme
+        theme.panelMargin = 8.0f;
+        theme.panelPadding = 5.0f;
+        theme.controlHeight = 26.0f;
+        theme.headerHeight = 20.0f;
+        theme.listItemHeight = 20.0f;
+        theme.borderSize = 1.0f;
+        theme.tabSpacing = 0.0f;
+        theme.tabPadding = 8.0f;
+        theme.toolButtonSize = 16.0f;
+        theme.toolBarHeight = 20.0f;
+        theme.treeIndent = 16.0f;
+        theme.minHSize = 200.0f;
+        theme.minVSize = 100.0f;
+        theme.controlMargin = 8.0f;
+        theme.controlPadding = 4.0f;
+        theme.controlSpacing = 2.0f;
+        theme.numericControlWidth = 40.0f;
+        theme.boolControlWidth = 40.0f;
+        theme.textControlWidth = 150.0f;
+
+        theme.windowColor = HexToColor(0x202531);
+        theme.darkColor = HexToColor(0x101218);
+        theme.panelColor = HexToColor(0x333b4f);
+        theme.panelBorderColor = HexToColor(0x191d27);
+        theme.areaColor = HexToColor(0x262c3b);
+        theme.areaBorderColor = HexToColor(0x191d27);
+        theme.controlColor = HexToColor(0x262c3b);
+        theme.controlBorderColor = HexToColor(0x202531);
+        theme.activeColor = HexToColor(0x699ce8);
+        theme.disabledControlColor = HexToColor(0x2e3547);
+        theme.disabledControlBorderColor = HexToColor(0x2e3547);
+        theme.separatorColor = HexToColor(0x333b4f);
+        theme.textColor = HexToColor(0xe0e0e0);
+        theme.textOverColor = HexToColor(0xffffff);
+        theme.disabledTextColor = HexToColor(0x777a82);
+        theme.toolButtonColor = HexToColor(0xe0e0e0);
+        theme.toolButtonHover = HexToColor(0xffffff);
+        theme.toolButtonDown = HexToColor(0x699ce8);
+        theme.inactiveTabColor = HexToColor(0x262c3b);
+        theme.dockColor = { theme.activeColor.r * 0.5f, theme.activeColor.g * 0.5f, theme.activeColor.b * 0.5f, theme.activeColor.a * 0.5f };
+        theme.disabledTint = { 0.5f, 0.5f, 0.5f, 1.0f };
+        theme.headerColor = HexToColor(404553);
+
+        whiteTexture.width = 1;
+        whiteTexture.height = 1;
+        whiteTexture.pData = (uint8_t *)&WHITE;
+        textureToCreate.push_back(&whiteTexture);
+
+        // Re-usable draw command.
+        drawCmd.command = eDrawCommand::Draw;
+
+        pPanelsManager = new PanelsManager();
+    }
+
+    Context::~Context()
+    {
+        delete pPanelsManager;
+    }
+
+    void Context::add(const IPanelRef &pPanel, const IPanelRef &pDockParent, eDockPosition dockPosition)
+    {
+        auto pPanelImpl = std::dynamic_pointer_cast<Panel>(pPanel);
+        auto pDockParentImpl = std::dynamic_pointer_cast<Panel>(pDockParent);
+
+        if (!pPanelImpl) return;
+
+        for (const auto &pOwnPanel : panels) if (pOwnPanel == pPanel) return; // Aleady added
+
+        if (!pDockParentImpl)
         {
-            uint8_t *pData;
-            uint32_t width, height;
-            uintptr_t id;
-        };
-
-        IRenderer *m_pRenderer = nullptr;
-        bool m_isDirty = true;
-        
-        int m_width = 200, m_height = 200;
-        int m_mouseX = 0, m_mouseY = 0;
-
-        std::vector<Vertex> m_vertices;
-        std::vector<DrawCommand> m_drawList;
-        std::vector<Texture *> m_textureToCreate;
-        std::vector<Texture *> m_textureToUpdate;
-        std::vector<Texture *> m_textureToDestroy;
-        Theme m_theme;
-
-        Texture m_whiteTexture;
-
-        DrawCommand m_drawCmd;
-        uintptr_t m_lastBoundTexture = 0;
-
-        Context(IRenderer *pRenderer, int width, int height)
-            : m_pRenderer(pRenderer)
-            , m_width(width)
-            , m_height(height)
-        {
-            // Setup default theme
-            m_theme.panelMargin = 8.0f;
-            m_theme.panelPadding = 5.0f;
-            m_theme.controlHeight = 26.0f;
-            m_theme.headerHeight = 20.0f;
-            m_theme.listItemHeight = 20.0f;
-            m_theme.borderSize = 1.0f;
-            m_theme.tabSpacing = 0.0f;
-            m_theme.tabPadding = 8.0f;
-            m_theme.toolButtonSize = 16.0f;
-            m_theme.toolBarHeight = 20.0f;
-            m_theme.treeIndent = 16.0f;
-            m_theme.minHSize = 200.0f;
-            m_theme.minVSize = 100.0f;
-            m_theme.controlMargin = 8.0f;
-            m_theme.controlPadding = 4.0f;
-            m_theme.controlSpacing = 2.0f;
-            m_theme.numericControlWidth = 40.0f;
-            m_theme.boolControlWidth = 40.0f;
-            m_theme.textControlWidth = 150.0f;
-
-            m_theme.windowColor = HexToColor(0x202531);
-            m_theme.darkColor = HexToColor(0x101218);
-            m_theme.panelColor = HexToColor(0x333b4f);
-            m_theme.panelBorderColor = HexToColor(0x191d27);
-            m_theme.areaColor = HexToColor(0x262c3b);
-            m_theme.areaBorderColor = HexToColor(0x191d27);
-            m_theme.controlColor = HexToColor(0x262c3b);
-            m_theme.controlBorderColor = HexToColor(0x202531);
-            m_theme.activeColor = HexToColor(0x699ce8);
-            m_theme.disabledControlColor = HexToColor(0x2e3547);
-            m_theme.disabledControlBorderColor = HexToColor(0x2e3547);
-            m_theme.separatorColor = HexToColor(0x333b4f);
-            m_theme.textColor = HexToColor(0xe0e0e0);
-            m_theme.textOverColor = HexToColor(0xffffff);
-            m_theme.disabledTextColor = HexToColor(0x777a82);
-            m_theme.toolButtonColor = HexToColor(0xe0e0e0);
-            m_theme.toolButtonHover = HexToColor(0xffffff);
-            m_theme.toolButtonDown = HexToColor(0x699ce8);
-            m_theme.inactiveTabColor = HexToColor(0x262c3b);
-            m_theme.dockColor = { m_theme.activeColor.r * 0.5f, m_theme.activeColor.g * 0.5f, m_theme.activeColor.b * 0.5f, m_theme.activeColor.a * 0.5f };
-            m_theme.disabledTint = { 0.5f, 0.5f, 0.5f, 1.0f };
-            m_theme.headerColor = HexToColor(404553);
-
-            m_whiteTexture.width = 1;
-            m_whiteTexture.height = 1;
-            m_whiteTexture.pData = (uint8_t *)&WHITE;
-            m_textureToCreate.push_back(&m_whiteTexture);
-
-            // Re-usable draw command.
-            m_drawCmd.command = eDrawCommand::Draw;
+            pPanelsManager->document_zone->panels.push_back(pPanelImpl);
+            pPanelsManager->document_zone->active_panel = (int)pPanelsManager->document_zone->panels.size() - 1;
         }
-
-        ~Context() {}
-
-        void add(const PanelRef &pPanel, const PanelRef &pDockParent, eDockPosition dockPosition) override
+        else
         {
-            if (!pPanel) return;
+            int index;
+            auto pDockZone = pPanelsManager->find(pDockParentImpl, &index);
+            if (pDockZone == nullptr) pDockZone = pPanelsManager->document_zone;
 
-            updateLayout();
-        }
-
-        void remove(const PanelRef &pPanel) override
-        {
-            if (!pPanel) return;
-
-            updateLayout();
-        }
-
-        void render() override
-        {
-            m_vertices.clear();
-            m_drawList.clear();
-
-            m_drawCmd.drawData.vertexStart = 0;
-            m_drawCmd.drawData.vertexCount = 0;
-            m_lastBoundTexture = 0;
-
-            // Create textures
-            for (auto &textureToCreate : m_textureToCreate)
+            if (dockPosition == eDockPosition::Center)
             {
-                textureToCreate->id = m_pRenderer->createTexture(textureToCreate->width, textureToCreate->height, textureToCreate->pData);
+                pDockZone->panels.push_back(pPanelImpl);
+                pDockZone->active_panel = (int)pDockZone->panels.size() - 1;
             }
-            m_textureToCreate.clear();
-
-            // Update textures
-            for (auto &textureToUpdate : m_textureToUpdate)
+            else
             {
-                m_pRenderer->updateTexture(textureToUpdate->id, textureToUpdate->width, textureToUpdate->height, textureToUpdate->pData);
+                DockContext dockContext;
+                dockContext.target = pDockZone;
+                dockContext.position = (eDockPanelPosition)dockPosition;
+                dockContext.tab_index = 0;
+                dockContext.amount = 0.5f;
+                dockContext.magnet = eDockMagnet::Middle;
+                dockContext.left_most = true;
+                dockContext.right_most = true;
+                dockContext.top_most = true;
+                dockContext.bottom_most = true;
+                pDockZone->dockPanel(pPanelImpl, dockContext);
             }
-            m_textureToUpdate.clear();
-
-            // Destroy textures
-            for (auto &textureToDestroy : m_textureToDestroy)
-            {
-                m_pRenderer->destroyTexture(textureToDestroy->id);
-            }
-            m_textureToDestroy.clear();
-
-            if (!m_isDirty) return;
-            m_isDirty = false;
-
-            // Generate drawlist
-            bindTexture(m_whiteTexture);
-            drawRect({ 50, 100, 150, 25 }, { 1, 0, 0, 1 });
-            flush();
-
-            // Call into the renderer for the actual render
-            m_pRenderer->beginFrame();
-            m_pRenderer->setVertexData(m_vertices.data(), (uint32_t)m_vertices.size());
-
-            for (const auto &cmd : m_drawList)
-            {
-                switch (cmd.command)
-                {
-                    case ogui::eDrawCommand::Draw:
-                        m_pRenderer->draw(cmd.drawData.vertexStart, cmd.drawData.vertexCount);
-                        break;
-                    case ogui::eDrawCommand::SetScissor:
-                        m_pRenderer->scissor(cmd.scissorData.x, cmd.scissorData.y, cmd.scissorData.width, cmd.scissorData.height);
-                        break;
-                    case ogui::eDrawCommand::BindTexture:
-                        m_pRenderer->bindTexture(cmd.bindTextureData.textureId);
-                        break;
-                    case ogui::eDrawCommand::UserDraw:
-                        m_pRenderer->userDraw(cmd.userDrawData.userDrawFn, cmd.userDrawData.pUserData, &cmd.userDrawData.x);
-                        break;
-                };
-            }
-
-            m_pRenderer->endFrame();
         }
 
-        const Theme &getTheme() const override { return m_theme; };
+        updateLayout();
+    }
 
-        void setTheme(const Theme &theme) override
-        {
-            m_theme = theme; // TODO: update textures
-            m_isDirty = true;
-        }
+    void Context::remove(const IPanelRef &pPanel)
+    {
+        auto pPanelImpl = std::dynamic_pointer_cast<Panel>(pPanel);
 
-        void setDirty() override
+        if (!pPanelImpl) return;
+        for (auto it = panels.begin(); it != panels.end(); ++it)
         {
-            m_isDirty = true;
-        }
-
-        void onResize(int width, int height) override
-        {
-            bool shouldUpdateLayout = false;
-            if (m_width != width || m_height != height)
-                shouldUpdateLayout = true;
-            m_width = width;
-            m_height = height;
-            if (shouldUpdateLayout)
+            if (*it == pPanelImpl)
             {
+                panels.erase(it);
                 updateLayout();
+                break;
             }
         }
+    }
 
-        void onMouseMove(int x, int y) override
+    void Context::render()
+    {
+        vertices.clear();
+        drawList.clear();
+
+        drawCmd.drawData.vertexStart = 0;
+        drawCmd.drawData.vertexCount = 0;
+        lastBoundTexture = 0;
+
+        // Create textures
+        for (auto &textureToCreate : textureToCreate)
         {
+            textureToCreate->id = pRenderer->createTexture(textureToCreate->width, textureToCreate->height, textureToCreate->pData);
         }
+        textureToCreate.clear();
 
-        void onMouseButtonDown(int button) override
+        // Update textures
+        for (auto &textureToUpdate : textureToUpdate)
         {
+            pRenderer->updateTexture(textureToUpdate->id, textureToUpdate->width, textureToUpdate->height, textureToUpdate->pData);
         }
+        textureToUpdate.clear();
 
-        void onMouseButtonUp(int button) override
+        // Destroy textures
+        for (auto &textureToDestroy : textureToDestroy)
         {
+            pRenderer->destroyTexture(textureToDestroy->id);
         }
+        textureToDestroy.clear();
 
-        void onMouseScroll(int scroll) override
-        {
-        }
+        if (!isDirty) return;
+        isDirty = false;
 
-        void onKeyDown(int key) override
-        {
-        }
+        // Generate drawlist
+        bindTexture(whiteTexture);
+        drawRect({ 50, 100, 150, 25 }, { 1, 0, 0, 1 });
+        flush();
 
-        void onKeyUp(int key) override
-        {
-        }
+        // Draw panels
+        pPanelsManager->render(this);
 
-        void onTextInput(const std::string &text) override
-        {
-        }
+        // Call into the renderer for the actual render
+        pRenderer->beginFrame();
+        pRenderer->setVertexData(vertices.data(), (uint32_t)vertices.size());
 
-        void updateLayout()
+        for (const auto &cmd : drawList)
         {
-            m_isDirty = true;
-        }
-
-        void flush()
-        {
-            if (m_drawCmd.drawData.vertexCount)
+            switch (cmd.command)
             {
-                m_drawList.push_back(m_drawCmd);
-                m_drawCmd.drawData.vertexStart += m_drawCmd.drawData.vertexCount;
-                m_drawCmd.drawData.vertexCount = 0;
-            }
+                case ogui::eDrawCommand::Draw:
+                    pRenderer->draw(cmd.drawData.vertexStart, cmd.drawData.vertexCount);
+                    break;
+                case ogui::eDrawCommand::SetScissor:
+                    pRenderer->scissor(cmd.scissorData.x, cmd.scissorData.y, cmd.scissorData.width, cmd.scissorData.height);
+                    break;
+                case ogui::eDrawCommand::BindTexture:
+                    pRenderer->bindTexture(cmd.bindTextureData.textureId);
+                    break;
+                case ogui::eDrawCommand::UserDraw:
+                    pRenderer->userDraw(cmd.userDrawData.userDrawFn, cmd.userDrawData.pUserData, &cmd.userDrawData.x);
+                    break;
+            };
         }
 
-        void bindTexture(const Texture &texture)
+        pRenderer->endFrame();
+    }
+
+    void Context::setTheme(const Theme &in_theme)
+    {
+        theme = in_theme; // TODO: update textures
+        isDirty = true;
+    }
+
+    void Context::setDirty()
+    {
+        isDirty = true;
+    }
+
+    void Context::onResize(int in_width, int in_height)
+    {
+        bool shouldUpdateLayout = false;
+        if (width != in_width || height != in_height)
+            shouldUpdateLayout = true;
+        width = in_width;
+        height = in_height;
+        if (shouldUpdateLayout)
         {
-            if (texture.id == m_lastBoundTexture) return;
-            flush();
-
-            DrawCommand cmd;
-            cmd.command = eDrawCommand::BindTexture;
-            cmd.bindTextureData.textureId = texture.id;
-            m_drawList.push_back(cmd);
-
-            m_lastBoundTexture = texture.id;
+            updateLayout();
         }
+    }
 
-        void drawRect(const Rect &rect, const Color &color)
+    void Context::onMouseMove(int x, int y)
+    {
+    }
+
+    void Context::onMouseButtonDown(int button)
+    {
+    }
+
+    void Context::onMouseButtonUp(int button)
+    {
+    }
+
+    void Context::onMouseScroll(int scroll)
+    {
+    }
+
+    void Context::onKeyDown(int key)
+    {
+    }
+
+    void Context::onKeyUp(int key)
+    {
+    }
+
+    void Context::onTextInput(const std::string &text)
+    {
+    }
+
+    void Context::updateLayout()
+    {
+        pPanelsManager->updateLayout(this);
+        isDirty = true;
+    }
+
+    void Context::flush()
+    {
+        if (drawCmd.drawData.vertexCount)
         {
-            auto color32 = ColorToHex(color);
-
-            m_vertices.push_back(Vertex{ { rect.x, rect.y }, { 0, 0 }, color32 });
-            m_vertices.push_back(Vertex{ { rect.x, rect.y + rect.h }, { 0, 0 }, color32 });
-            m_vertices.push_back(Vertex{ { rect.x + rect.w, rect.y + rect.h }, { 0, 0 }, color32 });
-            m_vertices.push_back(Vertex{ { rect.x + rect.w, rect.y + rect.h }, { 0, 0 }, color32 });
-            m_vertices.push_back(Vertex{ { rect.x + rect.w, rect.y }, { 0, 0 }, color32 });
-            m_vertices.push_back(Vertex{ { rect.x, rect.y }, { 0, 0 }, color32 });
-
-            m_drawCmd.drawData.vertexCount += 6;
+            drawList.push_back(drawCmd);
+            drawCmd.drawData.vertexStart += drawCmd.drawData.vertexCount;
+            drawCmd.drawData.vertexCount = 0;
         }
-    };
+    }
+
+    void Context::bindTexture(const Texture &texture)
+    {
+        if (texture.id == lastBoundTexture) return;
+        flush();
+
+        DrawCommand cmd;
+        cmd.command = eDrawCommand::BindTexture;
+        cmd.bindTextureData.textureId = texture.id;
+        drawList.push_back(cmd);
+
+        lastBoundTexture = texture.id;
+    }
+
+    void Context::drawRect(const Rect &rect, const Color &color)
+    {
+        auto color32 = ColorToHex(color);
+
+        vertices.push_back(Vertex{ { rect.x, rect.y }, { 0, 0 }, color32 });
+        vertices.push_back(Vertex{ { rect.x, rect.y + rect.h }, { 0, 0 }, color32 });
+        vertices.push_back(Vertex{ { rect.x + rect.w, rect.y + rect.h }, { 0, 0 }, color32 });
+        vertices.push_back(Vertex{ { rect.x + rect.w, rect.y + rect.h }, { 0, 0 }, color32 });
+        vertices.push_back(Vertex{ { rect.x + rect.w, rect.y }, { 0, 0 }, color32 });
+        vertices.push_back(Vertex{ { rect.x, rect.y }, { 0, 0 }, color32 });
+
+        drawCmd.drawData.vertexCount += 6;
+    }
 
     IContext *IContext::create(IRenderer *pRenderer, int width, int height)
     {
